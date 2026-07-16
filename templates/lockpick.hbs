@@ -1,0 +1,22 @@
+<div class="skyrim-lockpicking-app">
+    <div class="config-panel">
+        <label for="difficulty-select">Сложность:</label>
+        <select id="difficulty-select">
+            <option value="very_easy">Очень просто (Прочная отмычка)</option>
+            <option value="easy">Просто</option>
+            <option value="medium" selected>Средне</option>
+            <option value="hard">Сложно</option>
+            <option value="very_hard">Очень сложно (Хрупкая отмычка)</option>
+        </select>
+    </div>
+
+    <div class="info">Осталось отмычек: <span id="picks-count" style="color: #ffb300;">{{lockpicks}}</span></div>
+    
+    <div class="canvas-container">
+        <canvas id="lockpicking-canvas" width="400" height="400"></canvas>
+    </div>
+
+    <div class="controls">
+        Управление: <strong>Движение мыши</strong> — угол отмычки | Зажатие <strong>A / D</strong> — поворот замка
+    </div>
+</div>
