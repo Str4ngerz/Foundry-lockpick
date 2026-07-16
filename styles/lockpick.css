@@ -1,61 +1,57 @@
 .skyrim-lockpicking-app {
-    background: #191919;
-    color: #f0f0f0;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    user-select: none;
-    border-radius: 8px;
+  background: #191919;
+  color: #f0f0f0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0 4px 0;
+  user-select: none;
 }
-.skyrim-lockpicking-app .config-panel {
-    margin-bottom: 15px;
-    display: flex;
-    gap: 15px;
-    align-items: center;
-    background: #222;
-    padding: 8px 16px;
-    border-radius: 6px;
-    border: 1px solid #444;
-}
-.skyrim-lockpicking-app select {
-    background: #333;
-    color: #fff;
-    border: 1px solid #555;
-    padding: 4px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    outline: none;
-}
+
 .skyrim-lockpicking-app .canvas-container {
-    position: relative;
-    background: #2c2c2c;
-    border-radius: 50%;
-    padding: 10px;
-    box-shadow: inset 0 0 30px #000, 0 10px 25px rgba(0,0,0,0.5);
-    border: 3px solid #444;
+  position: relative;
+  background: #2c2c2c;
+  border-radius: 50%;
+  padding: 10px;
+  box-shadow: inset 0 0 30px #000, 0 10px 25px rgba(0,0,0,0.5);
+  border: 3px solid #444;
 }
-.skyrim-lockpicking-app canvas { 
-    cursor: none; 
-    border-radius: 50%;
+
+.skyrim-lockpicking-app canvas {
+  cursor: none;
+  border-radius: 50%;
+  display: block;
 }
-.skyrim-lockpicking-app .info { 
-    margin-bottom: 10px; 
-    font-weight: bold; 
-    font-size: 20px; 
-    text-shadow: 1px 1px 2px #000;
+
+.skyrim-lockpicking-app .info {
+  margin-bottom: 10px;
+  font-weight: bold;
+  font-size: 20px;
+  text-shadow: 1px 1px 2px #000;
+  color: #f0f0f0;
 }
+
+.skyrim-lockpicking-app .info .picks-count {
+  color: #ffb300;
+}
+
 .skyrim-lockpicking-app .controls {
-    margin-top: 15px;
-    text-align: center;
-    color: #aaa;
-    font-size: 14px;
+  margin-top: 15px;
+  text-align: center;
+  color: #aaa;
+  font-size: 14px;
 }
+
 .skyrim-lockpicking-app .controls strong {
-    color: #fff;
-    background: #444;
-    padding: 2px 6px;
-    border-radius: 3px;
+  color: #fff;
+  background: #444;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* GM flag-config dialog */
+.skyrim-lockpicking-config .form-group label {
+  color: #eee;
 }

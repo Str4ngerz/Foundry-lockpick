@@ -1,12 +1,17 @@
 {
   "id": "skyrim-lockpicking",
-  "title": "Skyrim Lockpicking Sandbox",
+  "title": "Skyrim Lockpicking",
+  "description": "Мини-игра взлома замков в стиле Skyrim. ГМ настраивает сложность (глобально и/или для конкретного предмета), игроки открывают окно взлома, кликая по взламываемым предметам/токенам.",
   "version": "1.0.0",
-  "compatibility": {
-    "minimum": "11"
-  },
-  "scripts": ["scripts/main.js"],
+  "authors": [{ "name": "Dan" }],
+  "compatibility": { "minimum": 11, "verified": 12 },
+  "scripts": [
+    "scripts/lockpick-app.js",
+    "scripts/main.js"
+  ],
   "styles": ["styles/lockpick.css"],
   "languages": [],
-  "packs": []
+  "url": "",
+  "manifest": "",
+  "download": ""
 }

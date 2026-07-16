@@ -1,0 +1,412 @@
+/**
+ * Skyrim Lockpicking - core minigame Application
+ * Порт логики из авторского HTML-прототипа в FoundryVTT Application.
+ */
+window.SkyrimLockpicking = window.SkyrimLockpicking || {};
+
+(() => {
+  const MODULE_ID = "skyrim-lockpicking";
+  SkyrimLockpicking.MODULE_ID = MODULE_ID;
+
+  // Настройки сложности - идентичны прототипу
+  const difficultySettings = { very_easy: 60, easy: 45, medium: 30, hard: 15, very_hard: 5 };
+  const difficultyWearSpeed = { very_easy: 0.8, easy: 1.5, medium: 2.5, hard: 4.5, very_hard: 8.0 };
+  SkyrimLockpicking.difficultySettings = difficultySettings;
+  SkyrimLockpicking.difficultyWearSpeed = difficultyWearSpeed;
+  SkyrimLockpicking.difficultyLabels = {
+    very_easy: "Очень просто",
+    easy: "Просто",
+    medium: "Средне",
+    hard: "Сложно",
+    very_hard: "Очень сложно"
+  };
+
+  class LockpickApp extends Application {
+    /**
+     * @param {object} opts
+     * @param {Item|Actor} opts.target       - документ с флагом pickable, который взламывается
+     * @param {Actor|null} opts.actingActor   - актор, чьи отмычки тратятся / кому засчитывается успех
+     * @param {string} opts.difficulty        - разрешённый ключ сложности (very_easy..very_hard)
+     */
+    constructor({ target, actingActor, difficulty }, options = {}) {
+      super(options);
+      this.target = target;
+      this.actingActor = actingActor || null;
+      this.difficulty = difficulty in difficultySettings ? difficulty : "medium";
+
+      // Состояние отмычек
+      this.lockpickItem = this._findLockpickItem();
+      this.unlimitedPicks = !this.lockpickItem;
+      this.lockpickCount = this.lockpickItem
+        ? (this.lockpickItem.system?.quantity ?? 1)
+        : 5;
+
+      // Игровое состояние (портировано из прототипа)
+      this.mockLockData = {
+        targetAngle: Math.floor(Math.random() * 160) + 10,
+        totalZoneWidth: difficultySettings[this.difficulty]
+      };
+      this.currentPickAngle = 90;
+      this.currentLockAngle = 0;
+      this.pickDurability = 100;
+      this.pickState = "normal";
+      this.animationTimer = 0;
+      this.appearOffset = 0;
+      this.debris = {
+        part1: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, vRot: 0 },
+        part2: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, vRot: 0 }
+      };
+      this.keysPressed = { KeyA: false, KeyD: false, ArrowLeft: false, ArrowRight: false };
+
+      // Аудио
+      this.audioCtx = null;
+      this.scratchOsc = null;
+      this.scratchGain = null;
+
+      this._rafId = null;
+      this._bound = {};
+    }
+
+    static get defaultOptions() {
+      return foundry.utils.mergeObject(super.defaultOptions, {
+        id: "skyrim-lockpicking-app",
+        title: "Взлом замка",
+        template: `modules/${MODULE_ID}/templates/lockpick-app.hbs`,
+        width: 440,
+        height: "auto",
+        resizable: false,
+        classes: ["skyrim-lockpicking-window"]
+      });
+    }
+
+    /** Удобный статический вход: открыть окно взлома */
+    static open(params) {
+      return new LockpickApp(params).render(true);
+    }
+
+    getData() {
+      return {
+        picksCount: this.unlimitedPicks ? "∞" : this.lockpickCount
+      };
+    }
+
+    _findLockpickItem() {
+      if (!this.actingActor) return null;
+      const items = this.actingActor.items?.filter(
+        i => i.getFlag(MODULE_ID, "isLockpick") && (i.system?.quantity ?? 1) > 0
+      ) ?? [];
+      return items[0] ?? null;
+    }
+
+    async _consumeLockpick() {
+      if (this.unlimitedPicks) {
+        this.lockpickCount = Math.max(0, this.lockpickCount - 1);
+        return;
+      }
+      if (!this.lockpickItem) return;
+      const qty = (this.lockpickItem.system?.quantity ?? 1) - 1;
+      this.lockpickCount = qty;
+      if (qty <= 0) {
+        await this.lockpickItem.delete();
+        this.lockpickItem = this._findLockpickItem();
+      } else {
+        await this.lockpickItem.update({ "system.quantity": qty });
+      }
+    }
+
+    /* ---------------------------- АУДИО ---------------------------- */
+
+    _initAudio() {
+      if (!this.audioCtx) {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (this.audioCtx.state === "suspended") this.audioCtx.resume();
+    }
+
+    _startScratchSound() {
+      if (!this.audioCtx || this.scratchOsc) return;
+      this.scratchOsc = this.audioCtx.createOscillator();
+      this.scratchGain = this.audioCtx.createGain();
+      this.scratchOsc.type = "sawtooth";
+      this.scratchOsc.frequency.setValueAtTime(100, this.audioCtx.currentTime);
+      this.scratchGain.gain.setValueAtTime(0.06, this.audioCtx.currentTime);
+      this.scratchOsc.connect(this.scratchGain);
+      this.scratchGain.connect(this.audioCtx.destination);
+      this.scratchOsc.start();
+    }
+
+    _updateScratchPitch(distance) {
+      if (!this.scratchOsc) return;
+      const targetFreq = 90 + distance * 4;
+      this.scratchOsc.frequency.setTargetAtTime(targetFreq, this.audioCtx.currentTime, 0.05);
+    }
+
+    _stopScratchSound() {
+      if (this.scratchOsc) {
+        this.scratchOsc.stop();
+        this.scratchOsc.disconnect();
+        this.scratchOsc = null;
+      }
+      if (this.scratchGain) {
+        this.scratchGain.disconnect();
+        this.scratchGain = null;
+      }
+    }
+
+    _playBreakSound() {
+      if (!this.audioCtx) return;
+      const breakOsc = this.audioCtx.createOscillator();
+      const breakGain = this.audioCtx.createGain();
+      breakOsc.type = "triangle";
+      breakOsc.frequency.setValueAtTime(600, this.audioCtx.currentTime);
+      breakOsc.frequency.exponentialRampToValueAtTime(80, this.audioCtx.currentTime + 0.15);
+      breakGain.gain.setValueAtTime(0.3, this.audioCtx.currentTime);
+      breakGain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.15);
+      breakOsc.connect(breakGain);
+      breakGain.connect(this.audioCtx.destination);
+      breakOsc.start();
+      breakOsc.stop(this.audioCtx.currentTime + 0.15);
+    }
+
+    /* -------------------------- ЛИСТЕНЕРЫ --------------------------- */
+
+    activateListeners(html) {
+      super.activateListeners(html);
+      this.canvas = html.find(".lockpicking-canvas")[0];
+      this.ctx = this.canvas.getContext("2d");
+      this.picksCountEl = html.find(".picks-count")[0];
+
+      this._bound.onMouseDown = () => this._initAudio();
+      this._bound.onMouseMove = (e) => this._onMouseMove(e);
+      this._bound.onKeyDown = (e) => this._onKeyDown(e);
+      this._bound.onKeyUp = (e) => this._onKeyUp(e);
+      this._bound.onBlur = () => this._clearKeys();
+
+      this.canvas.addEventListener("mousemove", this._bound.onMouseMove);
+      window.addEventListener("mousedown", this._bound.onMouseDown, { once: true });
+      window.addEventListener("keydown", this._bound.onKeyDown);
+      window.addEventListener("keyup", this._bound.onKeyUp);
+      window.addEventListener("blur", this._bound.onBlur);
+
+      this._initAudio(); // окно открыто по клику игрока - жест засчитан
+      this._loop();
+    }
+
+    async close(options) {
+      if (this._rafId) cancelAnimationFrame(this._rafId);
+      this._stopScratchSound();
+      if (this.audioCtx) this.audioCtx.close();
+      window.removeEventListener("keydown", this._bound.onKeyDown);
+      window.removeEventListener("keyup", this._bound.onKeyUp);
+      window.removeEventListener("blur", this._bound.onBlur);
+      window.removeEventListener("mousedown", this._bound.onMouseDown);
+      return super.close(options);
+    }
+
+    _onMouseMove(e) {
+      if (this.currentLockAngle > 0 || this.pickState !== "normal") return;
+      const rect = this.canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left - rect.width / 2;
+      const y = e.clientY - rect.top - rect.height / 2;
+      let angle = Math.atan2(-y, x) * (180 / Math.PI);
+      if (angle < 0) angle = x >= 0 ? 0 : 180;
+      this.currentPickAngle = angle;
+    }
+
+    _onKeyDown(e) {
+      if (this.pickState === "normal" && e.code in this.keysPressed) {
+        this.keysPressed[e.code] = true;
+      }
+    }
+
+    _onKeyUp(e) {
+      if (e.code in this.keysPressed) this.keysPressed[e.code] = false;
+    }
+
+    _clearKeys() {
+      for (const key in this.keysPressed) this.keysPressed[key] = false;
+      this._stopScratchSound();
+    }
+
+    /* --------------------------- ИГРОВОЙ ЦИКЛ --------------------------- */
+
+    _loop() {
+      this._updateLogic();
+      this._drawCanvas();
+      this._rafId = requestAnimationFrame(() => this._loop());
+    }
+
+    _updateLogic() {
+      if (this.pickState === "breaking") {
+        this.animationTimer++;
+        const d = this.debris;
+        d.part1.x += d.part1.vx; d.part1.y += d.part1.vy; d.part1.vy += 0.4; d.part1.rot += d.part1.vRot;
+        d.part2.x += d.part2.vx; d.part2.y += d.part2.vy; d.part2.vy += 0.4; d.part2.rot += d.part2.vRot;
+        if (this.currentLockAngle > 0) this.currentLockAngle -= 2;
+
+        if (this.animationTimer > 40) {
+          if (this.lockpickCount <= 0 && !this.unlimitedPicks) {
+            this._onOutOfPicks();
+          } else {
+            this._startAppearingAnimation();
+          }
+        }
+        return;
+      }
+
+      if (this.pickState === "appearing") {
+        this.appearOffset -= 8;
+        if (this.appearOffset <= 0) {
+          this.appearOffset = 0;
+          this.pickState = "normal";
+          this._clearKeys();
+        }
+        return;
+      }
+
+      const isTurning = this.keysPressed.KeyD || this.keysPressed.ArrowRight ||
+                         this.keysPressed.KeyA || this.keysPressed.ArrowLeft;
+
+      if (isTurning) {
+        const halfZone = this.mockLockData.totalZoneWidth / 2;
+        const minSafe = this.mockLockData.targetAngle - halfZone;
+        const maxSafe = this.mockLockData.targetAngle + halfZone;
+
+        if (this.currentPickAngle >= minSafe && this.currentPickAngle <= maxSafe) {
+          this._stopScratchSound();
+          if (this.currentLockAngle < 90) {
+            this.currentLockAngle += 1.5;
+          } else {
+            this.currentLockAngle = 90;
+            this._onSuccess();
+          }
+        } else {
+          const maxAllowedTurn = Math.max(0, 90 - Math.abs(this.currentPickAngle - this.mockLockData.targetAngle) * 3);
+          if (this.currentLockAngle < maxAllowedTurn) {
+            this._stopScratchSound();
+            this.currentLockAngle += 1.5;
+          } else {
+            this.currentLockAngle = maxAllowedTurn;
+            this._startScratchSound();
+            const distanceToZone = Math.abs(this.currentPickAngle - this.mockLockData.targetAngle);
+            this._updateScratchPitch(distanceToZone);
+            this.currentPickAngle += (Math.random() - 0.5) * 5;
+            this.pickDurability -= difficultyWearSpeed[this.difficulty];
+            if (this.pickDurability <= 0) this._triggerBreakAnimation();
+          }
+        }
+      } else {
+        this._stopScratchSound();
+        if (this.currentLockAngle > 0) {
+          this.currentLockAngle -= 4;
+          if (this.currentLockAngle < 0) this.currentLockAngle = 0;
+        }
+      }
+    }
+
+    _triggerBreakAnimation() {
+      this._stopScratchSound();
+      this._playBreakSound();
+      this.pickState = "breaking";
+      this.animationTimer = 0;
+      this._clearKeys();
+      this._consumeLockpick().then(() => {
+        if (this.picksCountEl) this.picksCountEl.innerText = this.unlimitedPicks ? "∞" : this.lockpickCount;
+      });
+
+      this.debris.part1 = { x: 50, y: 0, vx: (Math.random() - 0.4) * 2, vy: -Math.random() * 4 - 2, rot: 0, vRot: (Math.random() - 0.5) * 0.2 };
+      this.debris.part2 = { x: 100, y: 0, vx: (Math.random() + 0.4) * 2, vy: -Math.random() * 3 - 4, rot: 0, vRot: (Math.random() - 0.5) * 0.3 };
+    }
+
+    _startAppearingAnimation() {
+      this.pickState = "appearing";
+      this.pickDurability = 100;
+      this.currentLockAngle = 0;
+      this.currentPickAngle = 90;
+      this.mockLockData.targetAngle = Math.floor(Math.random() * 160) + 10;
+      this.appearOffset = 300;
+      this._clearKeys();
+    }
+
+    async _onSuccess() {
+      this._stopScratchSound();
+      const name = this.target?.name ?? "замок";
+      const who = this.actingActor?.name ?? game.user.name;
+      ChatMessage.create({
+        content: `<b>${who}</b> успешно вскрывает замок: <b>${name}</b>.`,
+        speaker: ChatMessage.getSpeaker({ actor: this.actingActor })
+      });
+      if (this.target) {
+        await this.target.setFlag(MODULE_ID, "locked", false);
+      }
+      this.close();
+    }
+
+    _onOutOfPicks() {
+      const name = this.target?.name ?? "замок";
+      const who = this.actingActor?.name ?? game.user.name;
+      ChatMessage.create({
+        content: `<b>${who}</b> ломает последнюю отмычку и не может вскрыть: <b>${name}</b>.`,
+        speaker: ChatMessage.getSpeaker({ actor: this.actingActor })
+      });
+      this.close();
+    }
+
+    /* ---------------------------- ОТРИСОВКА ---------------------------- */
+
+    _drawCanvas() {
+      const ctx = this.ctx;
+      const canvas = this.canvas;
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      let strokeColor = "#555";
+      let shadowColor = "transparent";
+      let shadowBlur = 0;
+
+      if (this.pickState === "normal" && this.pickDurability < 100) {
+        const stressFactor = (100 - this.pickDurability) / 100;
+        const r = Math.floor(85 + 170 * stressFactor);
+        const g = Math.floor(85 - 85 * stressFactor);
+        const b = Math.floor(85 - 85 * stressFactor);
+        strokeColor = `rgb(${r}, ${g}, ${b})`;
+        shadowColor = `rgba(255, 0, 0, ${stressFactor * 0.6})`;
+        shadowBlur = stressFactor * 15;
+      }
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(this.currentLockAngle * Math.PI / 180);
+      ctx.beginPath(); ctx.arc(0, 0, 90, 0, 2 * Math.PI);
+      ctx.fillStyle = "#333"; ctx.fill();
+      ctx.lineWidth = 6; ctx.strokeStyle = strokeColor; ctx.shadowBlur = shadowBlur; ctx.shadowColor = shadowColor; ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.beginPath(); ctx.arc(0, 0, 60, 0, 2 * Math.PI);
+      ctx.fillStyle = "#222"; ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = "#111"; ctx.stroke();
+      ctx.fillStyle = "#050505"; ctx.fillRect(-5, -25, 10, 50);
+      ctx.restore();
+
+      if (this.pickState === "breaking") {
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(-this.currentPickAngle * Math.PI / 180);
+        ctx.translate(this.debris.part1.x, this.debris.part1.y); ctx.rotate(this.debris.part1.rot);
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(50, 0);
+        ctx.lineWidth = 4; ctx.strokeStyle = "#d1d1d1"; ctx.stroke(); ctx.restore();
+
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(-this.currentPickAngle * Math.PI / 180);
+        ctx.translate(this.debris.part2.x, this.debris.part2.y); ctx.rotate(this.debris.part2.rot);
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(70, 0); ctx.lineTo(75, -8);
+        ctx.lineWidth = 4; ctx.strokeStyle = "#d1d1d1"; ctx.stroke(); ctx.restore();
+      } else {
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(-this.currentPickAngle * Math.PI / 180);
+        ctx.translate(this.appearOffset, 0);
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(140, 0);
+        ctx.lineWidth = 4; ctx.strokeStyle = "#d1d1d1"; ctx.lineCap = "round";
+        ctx.lineTo(145, -8); ctx.stroke(); ctx.restore();
+      }
+    }
+  }
+
+  SkyrimLockpicking.LockpickApp = LockpickApp;
+})();
