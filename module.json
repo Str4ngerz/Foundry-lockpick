@@ -11,7 +11,7 @@
   ],
   "styles": ["styles/lockpick.css"],
   "languages": [],
-  "url": "",
-  "manifest": "https://raw.githubusercontent.com/Str4ngerz/Foundry-lockpick/refs/heads/main/module.json",
-  "download": "https://github.com/Str4ngerz/Foundry-lockpick/blob/main/module.json"
+  "url": "https://github.com/Str4ngerz/Foundry-lockpick",
+  "manifest": "https://github.com/Str4ngerz/Foundry-lockpick/releases/latest/download/module.json",
+  "download": "https://github.com/Str4ngerz/Foundry-lockpick/releases/latest/download/module.zip"
 }
