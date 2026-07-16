@@ -2,7 +2,7 @@
   "id": "skyrim-lockpicking",
   "title": "Skyrim Lockpicking",
   "description": "Мини-игра взлома замков в стиле Skyrim. ГМ настраивает сложность (глобально и/или для конкретного предмета), игроки открывают окно взлома, кликая по взламываемым предметам/токенам.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "authors": [{ "name": "Dan" }],
   "compatibility": { "minimum": 11, "verified": 12 },
   "scripts": [

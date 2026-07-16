@@ -21,6 +21,14 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
     very_hard: "Очень сложно"
   };
 
+  // Пути к звукам-плейсхолдерам. Просто положите свои mp3 в modules/skyrim-lockpicking/sounds/
+  // с этими именами - код ничего больше менять не потребует.
+  const SOUND_PATHS = {
+    scratch: `modules/${MODULE_ID}/sounds/scratch.mp3`,
+    brk: `modules/${MODULE_ID}/sounds/break.mp3`,
+    success: `modules/${MODULE_ID}/sounds/success.mp3`
+  };
+
   class LockpickApp extends Application {
     /**
      * @param {object} opts
@@ -58,10 +66,21 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       };
       this.keysPressed = { KeyA: false, KeyD: false, ArrowLeft: false, ArrowRight: false };
 
-      // Аудио
-      this.audioCtx = null;
-      this.scratchOsc = null;
-      this.scratchGain = null;
+      // Флаг "игра уже завершена" - защита от повторного срабатывания
+      // успеха/провала на нескольких кадрах подряд, пока окно закрывается.
+      this._finished = false;
+
+      // Звуки (плейсхолдеры под mp3, см. SOUND_PATHS выше)
+      this._scratchPlaying = false;
+      this.sounds = {
+        scratch: new Audio(SOUND_PATHS.scratch),
+        brk: new Audio(SOUND_PATHS.brk),
+        success: new Audio(SOUND_PATHS.success)
+      };
+      this.sounds.scratch.loop = true;
+      this.sounds.scratch.volume = 0.5;
+      this.sounds.brk.volume = 0.7;
+      this.sounds.success.volume = 0.7;
 
       this._rafId = null;
       this._bound = {};
@@ -106,66 +125,49 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       if (!this.lockpickItem) return;
       const qty = (this.lockpickItem.system?.quantity ?? 1) - 1;
       this.lockpickCount = qty;
-      if (qty <= 0) {
-        await this.lockpickItem.delete();
-        this.lockpickItem = this._findLockpickItem();
-      } else {
-        await this.lockpickItem.update({ "system.quantity": qty });
+      try {
+        if (qty <= 0) {
+          await this.lockpickItem.delete();
+          this.lockpickItem = this._findLockpickItem();
+        } else {
+          await this.lockpickItem.update({ "system.quantity": qty });
+        }
+      } catch (err) {
+        console.warn(`${MODULE_ID} | не удалось обновить отмычку`, err);
       }
     }
 
-    /* ---------------------------- АУДИО ---------------------------- */
-
-    _initAudio() {
-      if (!this.audioCtx) {
-        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if (this.audioCtx.state === "suspended") this.audioCtx.resume();
-    }
+    /* ---------------------------- АУДИО (плейсхолдеры под mp3) ---------------------------- */
 
     _startScratchSound() {
-      if (!this.audioCtx || this.scratchOsc) return;
-      this.scratchOsc = this.audioCtx.createOscillator();
-      this.scratchGain = this.audioCtx.createGain();
-      this.scratchOsc.type = "sawtooth";
-      this.scratchOsc.frequency.setValueAtTime(100, this.audioCtx.currentTime);
-      this.scratchGain.gain.setValueAtTime(0.06, this.audioCtx.currentTime);
-      this.scratchOsc.connect(this.scratchGain);
-      this.scratchGain.connect(this.audioCtx.destination);
-      this.scratchOsc.start();
+      if (this._scratchPlaying) return;
+      this._scratchPlaying = true;
+      this.sounds.scratch.currentTime = 0;
+      this.sounds.scratch.play().catch(() => {});
     }
 
     _updateScratchPitch(distance) {
-      if (!this.scratchOsc) return;
-      const targetFreq = 90 + distance * 4;
-      this.scratchOsc.frequency.setTargetAtTime(targetFreq, this.audioCtx.currentTime, 0.05);
+      if (!this._scratchPlaying) return;
+      // Плейсхолдер: чем дальше от нужной зоны, тем быстрее/выше звук скрежета.
+      const rate = Math.min(2.5, 1 + distance / 60);
+      this.sounds.scratch.playbackRate = rate;
     }
 
     _stopScratchSound() {
-      if (this.scratchOsc) {
-        this.scratchOsc.stop();
-        this.scratchOsc.disconnect();
-        this.scratchOsc = null;
-      }
-      if (this.scratchGain) {
-        this.scratchGain.disconnect();
-        this.scratchGain = null;
-      }
+      if (!this._scratchPlaying) return;
+      this._scratchPlaying = false;
+      this.sounds.scratch.pause();
+      this.sounds.scratch.currentTime = 0;
     }
 
     _playBreakSound() {
-      if (!this.audioCtx) return;
-      const breakOsc = this.audioCtx.createOscillator();
-      const breakGain = this.audioCtx.createGain();
-      breakOsc.type = "triangle";
-      breakOsc.frequency.setValueAtTime(600, this.audioCtx.currentTime);
-      breakOsc.frequency.exponentialRampToValueAtTime(80, this.audioCtx.currentTime + 0.15);
-      breakGain.gain.setValueAtTime(0.3, this.audioCtx.currentTime);
-      breakGain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.15);
-      breakOsc.connect(breakGain);
-      breakGain.connect(this.audioCtx.destination);
-      breakOsc.start();
-      breakOsc.stop(this.audioCtx.currentTime + 0.15);
+      this.sounds.brk.currentTime = 0;
+      this.sounds.brk.play().catch(() => {});
+    }
+
+    _playSuccessSound() {
+      this.sounds.success.currentTime = 0;
+      this.sounds.success.play().catch(() => {});
     }
 
     /* -------------------------- ЛИСТЕНЕРЫ --------------------------- */
@@ -176,30 +178,25 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       this.ctx = this.canvas.getContext("2d");
       this.picksCountEl = html.find(".picks-count")[0];
 
-      this._bound.onMouseDown = () => this._initAudio();
       this._bound.onMouseMove = (e) => this._onMouseMove(e);
       this._bound.onKeyDown = (e) => this._onKeyDown(e);
       this._bound.onKeyUp = (e) => this._onKeyUp(e);
       this._bound.onBlur = () => this._clearKeys();
 
       this.canvas.addEventListener("mousemove", this._bound.onMouseMove);
-      window.addEventListener("mousedown", this._bound.onMouseDown, { once: true });
       window.addEventListener("keydown", this._bound.onKeyDown);
       window.addEventListener("keyup", this._bound.onKeyUp);
       window.addEventListener("blur", this._bound.onBlur);
 
-      this._initAudio(); // окно открыто по клику игрока - жест засчитан
       this._loop();
     }
 
     async close(options) {
       if (this._rafId) cancelAnimationFrame(this._rafId);
       this._stopScratchSound();
-      if (this.audioCtx) this.audioCtx.close();
       window.removeEventListener("keydown", this._bound.onKeyDown);
       window.removeEventListener("keyup", this._bound.onKeyUp);
       window.removeEventListener("blur", this._bound.onBlur);
-      window.removeEventListener("mousedown", this._bound.onMouseDown);
       return super.close(options);
     }
 
@@ -231,12 +228,15 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
     /* --------------------------- ИГРОВОЙ ЦИКЛ --------------------------- */
 
     _loop() {
+      if (this._finished) return;
       this._updateLogic();
       this._drawCanvas();
       this._rafId = requestAnimationFrame(() => this._loop());
     }
 
     _updateLogic() {
+      if (this._finished) return;
+
       if (this.pickState === "breaking") {
         this.animationTimer++;
         const d = this.debris;
@@ -278,6 +278,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
             this.currentLockAngle += 1.5;
           } else {
             this.currentLockAngle = 90;
+            this.pickState = "success"; // немедленно блокируем повторный вход
             this._onSuccess();
           }
         } else {
@@ -329,26 +330,27 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
     }
 
     async _onSuccess() {
+      if (this._finished) return;
+      this._finished = true;
+      if (this._rafId) cancelAnimationFrame(this._rafId);
       this._stopScratchSound();
-      const name = this.target?.name ?? "замок";
-      const who = this.actingActor?.name ?? game.user.name;
-      ChatMessage.create({
-        content: `<b>${who}</b> успешно вскрывает замок: <b>${name}</b>.`,
-        speaker: ChatMessage.getSpeaker({ actor: this.actingActor })
-      });
+      this._playSuccessSound();
+
       if (this.target) {
-        await this.target.setFlag(MODULE_ID, "locked", false);
+        try {
+          await this.target.setFlag(MODULE_ID, "locked", false);
+        } catch (err) {
+          console.warn(`${MODULE_ID} | не удалось снять флаг locked`, err);
+        }
       }
       this.close();
     }
 
     _onOutOfPicks() {
-      const name = this.target?.name ?? "замок";
-      const who = this.actingActor?.name ?? game.user.name;
-      ChatMessage.create({
-        content: `<b>${who}</b> ломает последнюю отмычку и не может вскрыть: <b>${name}</b>.`,
-        speaker: ChatMessage.getSpeaker({ actor: this.actingActor })
-      });
+      if (this._finished) return;
+      this._finished = true;
+      if (this._rafId) cancelAnimationFrame(this._rafId);
+      this._stopScratchSound();
       this.close();
     }
 
