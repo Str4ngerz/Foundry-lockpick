@@ -41,18 +41,71 @@
     return game.settings.get(MODULE_ID, "defaultDifficulty");
   };
 
+  /**
+   * Модификатор навыка "Ловкость рук" (dnd5e: system.skills.slt) у актора.
+   * Возвращает 0, если у актора нет такого навыка (например, у ГМ без
+   * назначенного персонажа) - в этом случае бонус будет нулевым (дефолт).
+   */
+  SkyrimLockpicking.getSleightOfHandMod = (actor) => {
+    if (!actor) return 0;
+    const skill = actor.system?.skills?.slt;
+    if (!skill) return 0;
+    return skill.total ?? skill.mod ?? 0;
+  };
+
+  /**
+   * Переводит модификатор навыка в игровой бонус: +0.05 (то есть +5%) за
+   * каждую единицу модификатора. Ограничено разумными пределами, чтобы
+   * экстремально высокая/низкая Ловкость рук не ломала баланс полностью.
+   */
+  SkyrimLockpicking.computeSkillBonus = (actor) => {
+    const mod = SkyrimLockpicking.getSleightOfHandMod(actor);
+    const bonus = Math.max(-0.5, Math.min(1.0, mod * 0.05));
+    return { mod, bonus };
+  };
+
   /** Кто тратит отмычки/получает успех */
   SkyrimLockpicking.resolveActingActor = (contextActor, { isOwnInventory }) => {
     if (isOwnInventory) return contextActor;
     return game.user.character ?? canvas.tokens?.controlled?.[0]?.actor ?? null;
   };
 
+  /**
+   * Ищем предмет-отмычку у актора: либо явно помеченный флагом isLockpick,
+   * либо просто предмет с именем "Lockpick" (без учёта регистра/пробелов).
+   * Возвращает null, если подходящего предмета с количеством > 0 нет.
+   */
+  SkyrimLockpicking.findLockpickItem = (actor) => {
+    if (!actor) return null;
+    const items = actor.items ?? [];
+    for (const item of items) {
+      const qty = item.system?.quantity ?? 1;
+      if (qty <= 0) continue;
+      const flagged = item.getFlag(MODULE_ID, "isLockpick") === true;
+      const namedLockpick = (item.name ?? "").trim().toLowerCase() === "lockpick";
+      if (flagged || namedLockpick) return item;
+    }
+    return null;
+  };
+
   SkyrimLockpicking.launchFor = (target, actingActor, isOwnInventory) => {
     if (!SkyrimLockpicking.isPickable(target)) return;
     if (!SkyrimLockpicking.isLocked(target)) return; // уже открыт
+
     const actor = SkyrimLockpicking.resolveActingActor(actingActor, { isOwnInventory });
+    if (!actor) {
+      ui.notifications.warn("Не назначен персонаж - нечем взламывать замок.");
+      return;
+    }
+
+    const lockpickItem = SkyrimLockpicking.findLockpickItem(actor);
+    if (!lockpickItem) {
+      ui.notifications.warn(`У ${actor.name} нет отмычек (предмет "Lockpick") - взлом невозможен.`);
+      return;
+    }
+
     const difficulty = SkyrimLockpicking.resolveDifficulty(target);
-    SkyrimLockpicking.LockpickApp.open({ target, actingActor: actor, difficulty });
+    SkyrimLockpicking.LockpickApp.open({ target, actingActor: actor, difficulty, lockpickItem });
   };
 
   /* --------------------- GM: ДИАЛОГ НАСТРОЙКИ ЗАМКА НА ПРЕДМЕТЕ --------------------- */
@@ -83,7 +136,7 @@
         </div>
         ${isItem ? `
         <div class="form-group">
-          <label><input type="checkbox" name="isLockpick" ${isLockpickTool ? "checked" : ""}/> Это расходник-отмычка (тратится игроками при взломе)</label>
+          <label><input type="checkbox" name="isLockpick" ${isLockpickTool ? "checked" : ""}/> Это расходник-отмычка (если имя предмета не "Lockpick")</label>
         </div>` : ``}
       </form>
     `;
@@ -156,15 +209,33 @@
 
   /* --------------------- ИГРОК: ДВОЙНОЙ КЛИК ПО ТОКЕНУ-СУНДУКУ --------------------- */
 
-  Hooks.once("ready", () => {
-    const original = Token.prototype._onClickLeft2;
-    Token.prototype._onClickLeft2 = function (event) {
-      const actor = this.actor;
-      if (actor && SkyrimLockpicking.isPickable(actor) && SkyrimLockpicking.isLocked(actor)) {
+  // ВАЖНО: слушаем клик напрямую на PIXI-объекте токена, а не через
+  // Token.prototype._onClickLeft2. Дело в том, что Foundry вызывает
+  // _onClickLeft2 только если пользователь может "управлять" токеном
+  // (обычно требует прав Owner), а токены-сундуки/двери у игроков чаще
+  // всего Owner не имеют. Прямой pointerdown-слушатель на токене срабатывает
+  // независимо от прав владения (как и подсветка/тултип при наведении).
+  Hooks.on("drawToken", (token) => {
+    if (token._skyrimLockpickBound) return;
+    token._skyrimLockpickBound = true;
+
+    let lastClick = 0;
+    const DBLCLICK_MS = 350;
+
+    token.on("pointerdown", (event) => {
+      const actor = token.actor;
+      if (!actor) return;
+      if (!SkyrimLockpicking.isPickable(actor) || !SkyrimLockpicking.isLocked(actor)) return;
+
+      const now = Date.now();
+      if (now - lastClick < DBLCLICK_MS) {
+        lastClick = 0;
+        event?.stopPropagation?.();
+        console.debug(`${MODULE_ID} | двойной клик по токену-сундуку`, actor.name);
         SkyrimLockpicking.launchFor(actor, actor, false);
-        return;
+      } else {
+        lastClick = now;
       }
-      return original.call(this, event);
-    };
+    });
   });
 })();

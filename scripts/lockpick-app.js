@@ -35,24 +35,33 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
      * @param {Item|Actor} opts.target       - документ с флагом pickable, который взламывается
      * @param {Actor|null} opts.actingActor   - актор, чьи отмычки тратятся / кому засчитывается успех
      * @param {string} opts.difficulty        - разрешённый ключ сложности (very_easy..very_hard)
+     * @param {Item} opts.lockpickItem         - предмет-отмычка, уже найденный и проверенный вызывающей стороной
      */
-    constructor({ target, actingActor, difficulty }, options = {}) {
+    constructor({ target, actingActor, difficulty, lockpickItem }, options = {}) {
       super(options);
       this.target = target;
       this.actingActor = actingActor || null;
       this.difficulty = difficulty in difficultySettings ? difficulty : "medium";
 
-      // Состояние отмычек
-      this.lockpickItem = this._findLockpickItem();
-      this.unlimitedPicks = !this.lockpickItem;
-      this.lockpickCount = this.lockpickItem
-        ? (this.lockpickItem.system?.quantity ?? 1)
-        : 5;
+      // Состояние отмычек - launchFor() в main.js уже гарантирует, что
+      // lockpickItem существует и его количество > 0, до открытия окна.
+      this.lockpickItem = lockpickItem ?? null;
+      this.unlimitedPicks = false;
+      this.lockpickCount = this.lockpickItem?.system?.quantity ?? 1;
+
+      // Бонус от навыка "Ловкость рук" подконтрольного персонажа.
+      // Если у актора нет такого навыка (например, у ГМ без персонажа) - 0 (дефолт).
+      const skillInfo = SkyrimLockpicking.computeSkillBonus(this.actingActor);
+      this.skillMod = skillInfo.mod;
+      this.skillBonus = skillInfo.bonus;
+      this.baseZoneWidth = difficultySettings[this.difficulty];
+      // Чем выше бонус, тем медленнее снашивается отмычка
+      this.wearMultiplier = Math.max(0.2, 1 - this.skillBonus);
 
       // Игровое состояние (портировано из прототипа)
       this.mockLockData = {
         targetAngle: Math.floor(Math.random() * 160) + 10,
-        totalZoneWidth: difficultySettings[this.difficulty]
+        totalZoneWidth: Math.min(170, this.baseZoneWidth * (1 + this.skillBonus))
       };
       this.currentPickAngle = 90;
       this.currentLockAngle = 0;
@@ -104,31 +113,28 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
     }
 
     getData() {
+      const fmt = (n) => (n >= 0 ? "+" : "") + n.toFixed(1).replace(".", ",");
       return {
-        picksCount: this.unlimitedPicks ? "∞" : this.lockpickCount
+        picksCount: this.lockpickCount,
+        skillModDisplay: (this.skillMod >= 0 ? "+" : "") + this.skillMod,
+        durabilityBonusDisplay: fmt(this.skillBonus),
+        zoneBonusDisplay: fmt(this.skillBonus)
       };
     }
 
-    _findLockpickItem() {
-      if (!this.actingActor) return null;
-      const items = this.actingActor.items?.filter(
-        i => i.getFlag(MODULE_ID, "isLockpick") && (i.system?.quantity ?? 1) > 0
-      ) ?? [];
-      return items[0] ?? null;
-    }
-
     async _consumeLockpick() {
-      if (this.unlimitedPicks) {
-        this.lockpickCount = Math.max(0, this.lockpickCount - 1);
+      if (!this.lockpickItem) {
+        this.lockpickCount = 0;
         return;
       }
-      if (!this.lockpickItem) return;
       const qty = (this.lockpickItem.system?.quantity ?? 1) - 1;
       this.lockpickCount = qty;
       try {
         if (qty <= 0) {
           await this.lockpickItem.delete();
-          this.lockpickItem = this._findLockpickItem();
+          // Возможно, у актора есть ещё одна отмычка отдельным стеком/предметом
+          this.lockpickItem = SkyrimLockpicking.findLockpickItem(this.actingActor);
+          if (this.lockpickItem) this.lockpickCount = this.lockpickItem.system?.quantity ?? 1;
         } else {
           await this.lockpickItem.update({ "system.quantity": qty });
         }
@@ -292,7 +298,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
             const distanceToZone = Math.abs(this.currentPickAngle - this.mockLockData.targetAngle);
             this._updateScratchPitch(distanceToZone);
             this.currentPickAngle += (Math.random() - 0.5) * 5;
-            this.pickDurability -= difficultyWearSpeed[this.difficulty];
+            this.pickDurability -= difficultyWearSpeed[this.difficulty] * this.wearMultiplier;
             if (this.pickDurability <= 0) this._triggerBreakAnimation();
           }
         }

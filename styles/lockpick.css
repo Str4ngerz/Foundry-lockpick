@@ -37,6 +37,13 @@
   color: #ffb300;
 }
 
+.skyrim-lockpicking-app .skill-info {
+  font-size: 12px;
+  color: #8fbf8f;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
 .skyrim-lockpicking-app .controls {
   margin-top: 15px;
   text-align: center;
