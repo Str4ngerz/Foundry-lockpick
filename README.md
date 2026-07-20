@@ -1,56 +1,167 @@
-# Skyrim Lockpicking
+# Lockpicking Minigame
 
-## Installation
-Unzip the `skyrim-lockpicking` folder to `Data/modules/` in your Foundry, or
-install from the local `module.json` via "Install Module" -> "Manifest URL".
-Enable the module in the world settings.
+## ⚠️ Переименование модуля (v3.0.0)
+Раньше модуль назывался `skyrim-lockpicking`. ID модуля изменился на
+`lockpicking-minigame` - это значит:
+- Папку старой версии нужно удалить из `Data/modules/` и поставить новую
+  (просто накатить поверх старой папки НЕЛЬЗЯ - имя изменилось)
+- Все уже настроенные через кнопку 🔒 предметы/акторы (флаги `pickable`,
+  `locked`, `difficulty`, `isLockpick`) нужно **настроить заново** - флаги
+  хранились под старым именем модуля и не переносятся автоматически
+- Настройка сложности по умолчанию и выбор языка тоже сбросятся на дефолт
 
-## How it works
+## Установка
+Распаковать папку `lockpicking-minigame` в `Data/modules/` вашего Foundry, либо
+установить по локальному `module.json` через "Install Module" -> "Manifest URL".
+Включить модуль в настройках мира.
 
-### 1. Difficulty (GM only)
-`Game Settings -> Configure Module Settings -> Sklockpicking: Default Lock Difficulty`
-Players see this field, but only the GM can change it (default behavior
-in Foundry world-scope settings).
+## Как это работает
 
-### 2. The "Hackable" flag on an item or actor
-On the **Item** sheet and the **Actor** sheet (for chest/door actors), the GM
-will see a button in the window header: **🔒 Lock**. Here you can set:
-- **Hackable** — activates the minigame on click
-- **Locked** — unlocks automatically after successfully hacking with a module
-- **Difficulty** — either "as in general settings" or a specific value
-just for this item/actor (individual override)
-- **This is a consumable lockpick** (for items only) — mark an item
-of the "Lockpick" type in the character's inventory as such; this is the item that will be consumed when hacked
+### 1. Сложность (только ГМ)
+`Настройки игры -> Настроить настройки модуля -> Sklockpicking: Сложность замков по умолчанию`
+Игроки видят это поле, но изменить его может только ГМ (стандартное поведение
+world-scope настроек Foundry).
 
-### 3. Entry Points for Players
-- **Inventory**: Clicking on the row of a hackable item on the character sheet
-opens the minigame instead of opening the item card normally. Lockpicks from the inventory of the same character are consumed.
-- **Token Chest**: Double-clicking on a token whose actor is marked as
-"hackable" opens the minigame instead of the actor's sheet. Lockpicks
-of the assigned player character (`game.user.character`) are consumed. The click listener
-is attached directly to the token's PIXI object (`token.on("pointerdown", ...)`), not to `Token.prototype._onClickLeft2` — specifically to ensure it works for
-players without Owner rights to the token chest (a regular click wouldn't reach the code for them, so previously only GMs would trigger it).
+### 2. Флаг "взламываемый" на предмете или актёре
+На листе **Предмета** и на листе **Актёра** (для акторов-сундуков/дверей) у ГМ
+появляется кнопка в шапке окна: **🔒 Замок**. В ней можно выставить:
+- **Взламываемый** — включает мини-игру по клику
+- **Заперт** — снимается автоматически после успешного взлома модулем
+- **Сложность** — либо "как в общих настройках", либо конкретное значение
+  just для этого предмета/актёра (индивидуальный оверрайд)
+- **Это расходник-отмычка** (только для предметов) — пометьте так предмет
+  типа "Отмычка" в инвентаре персонажа; именно он будет тратиться при поломке
 
-### 4. Mandatory "Lockpick" Item
-Without an item named **"Lockpick"** (case-insensitive) or explicitly
-marked with the "this is a lockpick consumable" flag in the inventory of the lockpicking character, the minigame won't open at all — only a warning will appear in the
-corner of the screen. This applies to both methods of invoking (inventory and token chest).
+### 3. Точки входа для игроков
+- **Инвентарь**: клик по строке взламываемого предмета на листе персонажа
+  открывает мини-игру вместо обычного открытия карточки предмета. Тратятся
+  отмычки из инвентаря *этого же* персонажа.
+- **Токен-сундук**: двойной клик по токену, чей актёр помечен как
+  "взламываемый", открывает мини-игру вместо листа актёра. Тратятся отмычки
+  назначенного персонажа игрока (`game.user.character`). Слушатель клика
+  висит прямо на PIXI-объекте токена (`token.on("pointerdown", ...)`), а не
+  на `Token.prototype._onClickLeft2` — специально, чтобы работать и у
+  игроков без прав Owner на токен-сундук (обычный клик у них до кода не
+  долетал, поэтому раньше срабатывало только у ГМ).
 
-## Sound
-Synthesized sound via Web Audio has been replaced with regular mp3 placeholders.
-Place the files `scratch.mp3`, `break.mp3`, and `success.mp3` in the `sounds/` folder (see `sounds/README.txt`) - the code will pick them up automatically.
+### 4. Обязательный предмет "Lockpick"
+Без предмета с названием **"Lockpick"** (без учёта регистра) или явно
+помеченного флагом "это расходник-отмычка" в инвентаре взламывающего
+персонажа мини-игра вообще не откроется — будет только предупреждение в
+углу экрана. Это касается обоих способов вызова (инвентарь и токен-сундук).
 
-## Sleight of Hand Bonus
-Lockpick durability and safe zone size are scaled by the modifier of the player-controlled character's **Sleight of Hand** skill (`system.skills.slt`, dnd5e): `+0.05` (i.e. +5%) for each modifier point, with a cap of
-`+1.0`/`-0.5`. If the actor doesn't have this skill (for example, a GM without an assigned character), the bonus will be `+0.0` (default, unchanged).
-The current value is shown in the corner of the lockpicking window, for example:
-`Sleight of Hand: +6 (lockpick durability +0.3, area size +0.3)` - this immediately
-shows that the bonus has actually been applied.
+## Звук
+Синтезированный звук через Web Audio заменён на обычные mp3-плейсхолдеры.
+Положите файлы `scratch.mp3`, `break.mp3`, `success.mp3`, `probe.mp3`,
+`turn.mp3` в папку `sounds/` (см. `sounds/README.txt`) - код их подхватит
+автоматически.
 
-## Known assumptions (can be adjusted for your system)
-- Consuming lockpicks reduces the `system.quantity` of the lockpick item by 1 when broken.
-If the field is called differently in the D&D5e system, adjust it in `_consumeLockpick()`
-in `scripts/lockpick-app.js`.
-- Successful lockpicking sets `locked = false` on the document and closes the window
-(without chat messages - removed by request); does not automatically
-open doors or loot - this is an integration point for a specific setup (Item Piles, Walls doors, etc.).
+## Бонус от "Ловкости рук"
+Прочность отмычки и размер безопасной зоны масштабируются модификатором
+навыка **Ловкость рук** (`system.skills.slt`, dnd5e) подконтрольного игроку
+персонажа: `+0,05` (то есть +5%) за каждую единицу модификатора, с потолком
+`+1,0`/`-0,5`. Если у актора нет такого навыка (например, у ГМ без
+назначенного персонажа) - бонус будет `+0,0` (дефолт, без изменений).
+Текущее значение показывается в углу окна взлома, например:
+`Ловкость рук: +6 (прочность отмычки +0,3, размер области +0,3)` - так сразу
+видно, что бонус действительно применился.
+
+## Диагностика (если снова "ничего не происходит")
+Модуль теперь логирует каждый шаг в консоль браузера (F12 -> Console),
+с префиксом `lockpicking-minigame |`. При наведении и клике на токен должны
+появиться сообщения вида:
+- `hoverToken` - видит ли модуль вообще наведение на токен, и проходит ли
+  он проверку "взламываемый + заперт" (eligible: true/false)
+- `canvas pointerdown` - клик по канвасу долетел, и что было под курсором
+  в момент клика (`hovered`)
+- `launchFor: цель не помечена pickable` / `цель уже разблокирована`
+- `resolveActingActor` - кто был выбран "взломщиком"
+- `findLockpickItem` - список предметов актора-взломщика и результат проверки
+
+Если даже `hoverToken` не появляется при наведении на токен - значит сам
+Foundry не считает этот токен видимым/наводимым для текущего пользователя
+(проверьте видимость токена на сцене и настройки Vision/Fog of War), это
+уже не имеет отношения к правам владения.
+
+Отдельно: если `resolveActingActor` каждый раз резолвит не того персонажа,
+на котором лежат отмычки - надёжнее всего явно назначить персонажа игроку
+через **Настройки -> Управление игроками** (иконка персонажа рядом с именем
+пользователя) - тогда `game.user.character` всегда будет указывать точно
+на нужного актора, независимо от того, что выделено на канвасе в момент клика.
+
+## Права на "открытие" сундука (важно!)
+Игрок обычно НЕ является Owner актора-сундука (особенно если это ActorDelta
+от unlinked-токена) - прямой `setFlag()` в этом случае падает с ошибкой вида
+`lacks permission to update ActorDelta`. Модуль это обходит: если у текущего
+пользователя нет прав - запрос на снятие `locked` уходит через `game.socket`
+любому активному ГМ-клиенту как запрос/ответ с таймаутом 4с (не просто
+"выстрелил и забыл" - в консоли будет видно, ответил ли реально кто-то из ГМ).
+**В сессии должен быть открыт клиент хотя бы одного ГМ**, иначе через 4
+секунды в консоли появится предупреждение "похоже, ни один ГМ-клиент не в
+сети", и флаг не снимется.
+
+Сообщение об успешном взломе в чат создаётся сразу локально у игрока (это не
+требует прав) - оно появится в любом случае, даже если снятие `locked` не
+удалось.
+
+## Спрайты (текстуры)
+Отрисовка фигурами на канвасе заменена на изображения из папки `textures/`:
+- `background.png` - статичный фон/оправа, не вращается
+- `lock.png` - **сам замок - именно эта текстура проворачивается** вместе с
+  барабаном (currentLockAngle)
+- `pick.png` - отмычка; точка поворота - левый край спрайта (0, высота/2),
+  так же используется (обрезанными кусками) для анимации поломки
+
+В комплекте лежат сгенерированные плейсхолдеры (просто чтобы модуль сразу
+работал) - замените файлы своей графикой с теми же именами, код ничего
+менять не потребует. Разрешение можно менять свободно, и реальные пропорции
+файла теперь всегда сохраняются (никакого сплющивания в квадрат/фиксированный
+прямоугольник): `background.png` и `lock.png` вписываются ("contain") в
+квадрат 400x400 и 200x200 соответственно по большей стороне, а у `pick.png`
+фиксирована только ширина отображения (влияет на игровую механику вращения),
+высота считается пропорционально.
+
+**Автообрезка прозрачных полей.** Если в файле вокруг самого рисунка есть
+большие прозрачные отступы (частый случай для рендеров из 3D) - код сам
+находит bounding box непрозрачных пикселей при загрузке и использует именно
+его как "содержимое", а не весь холст файла. Иначе большие поля вокруг
+объекта делают сам объект крошечным после масштабирования (это и была
+причина, почему замок казался маленьким). Обрезка `pick.png` на "обломки"
+при поломке тоже считается от этого bounding box, а не от размера файла.
+
+Фон (`background.png`) отображается квадратным, а не круглым - раньше
+контейнер канваса был обрезан по кругу через CSS (`border-radius: 50%`),
+теперь это убрано.
+
+## Подгонка замка под фон вплотную (без зазора)
+Фон и замок масштабируются ОДНИМ И ТЕМ ЖЕ коэффициентом (посчитанным от
+фона), а не независимо друг от друга - если оба текстуры родом из одного
+рендера/сцены в одинаковом холсте, их относительные пропорции сохранятся
+и зазора между "рамкой" фона и диском замка не будет. Индикатор напряжения
+(износ отмычки) теперь рисуется отдельным полупрозрачным красным кругом
+ПОВЕРХ замка, а не тенью под спрайтом.
+
+Отмычка сдвинута немного вверх (в сторону круглой/центральной части замка,
+а не геометрического центра текстуры) и вращается ВМЕСТЕ с замком при его
+повороте - её точка поворота вложена внутрь трансформации вращения замка,
+поэтому визуально она "едет" вместе с барабаном, а не остаётся неподвижной
+относительно экрана.
+
+## Язык модуля
+Отдельная настройка (Настройки -> Управление модулями -> Lockpicking Minigame),
+**не привязанная к общему языку интерфейса Foundry** - каждый пользователь
+выбирает у себя английский или русский для текста самого модуля (окно
+взлома, диалог ГМ, сообщения, уведомления). Настройка клиентская (scope:
+client), так что у ГМ и разных игроков язык может отличаться одновременно.
+Все строки лежат в `scripts/lang.js` - добавить свой язык можно, скопировав
+существующий блок `ru`/`en` и добавив ключ в `choices` настройки `language`
+в `scripts/main.js`.
+
+## Известные допущения (можно поправить под свою систему)
+- Расход отмычек уменьшает `system.quantity` предмета-отмычки на 1 при поломке.
+  Если в системе D&D5e поле называется иначе — поправить в `_consumeLockpick()`
+  в `scripts/lockpick-app.js`.
+- Успех взлома выставляет `locked = false` на документе и закрывает окно
+  (без сообщений в чат — по запросу убраны); никакого автоматического
+  открытия двери/лута не делает — это интеграционная точка под конкретный
+  сетап (Item Piles, Walls doors и т.п.).

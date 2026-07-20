@@ -1,12 +1,10 @@
-<div class="skyrim-lockpicking-app">
-  <div class="info">Осталось отмычек: <span class="picks-count">{{picksCount}}</span></div>
-  <div class="skill-info">Ловкость рук: {{skillModDisplay}} (прочность отмычки {{durabilityBonusDisplay}}, размер области {{zoneBonusDisplay}})</div>
+<div class="lockpicking-minigame-app">
+  <div class="info">{{picksLabel}} <span class="picks-count">{{picksCount}}</span></div>
+  <div class="skill-info">{{skillLine}}</div>
 
   <div class="canvas-container">
     <canvas class="lockpicking-canvas" width="400" height="400"></canvas>
   </div>
 
-  <div class="controls">
-    Управление: <strong>Движение мыши</strong> — угол отмычки | Зажатие <strong>A / D</strong> — поворот замка
-  </div>
+  <div class="controls">{{{controlsHint}}}</div>
 </div>

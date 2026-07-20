@@ -1,33 +1,92 @@
 /**
- * Skyrim Lockpicking - core minigame Application
+ * Lockpicking Minigame - core minigame Application
  * Порт логики из авторского HTML-прототипа в FoundryVTT Application.
  */
-window.SkyrimLockpicking = window.SkyrimLockpicking || {};
+window.LockpickingMinigame = window.LockpickingMinigame || {};
 
 (() => {
-  const MODULE_ID = "skyrim-lockpicking";
-  SkyrimLockpicking.MODULE_ID = MODULE_ID;
+  const MODULE_ID = "lockpicking-minigame";
+  LockpickingMinigame.MODULE_ID = MODULE_ID;
 
   // Настройки сложности - идентичны прототипу
   const difficultySettings = { very_easy: 60, easy: 45, medium: 30, hard: 15, very_hard: 5 };
   const difficultyWearSpeed = { very_easy: 0.8, easy: 1.5, medium: 2.5, hard: 4.5, very_hard: 8.0 };
-  SkyrimLockpicking.difficultySettings = difficultySettings;
-  SkyrimLockpicking.difficultyWearSpeed = difficultyWearSpeed;
-  SkyrimLockpicking.difficultyLabels = {
-    very_easy: "Очень просто",
-    easy: "Просто",
-    medium: "Средне",
-    hard: "Сложно",
-    very_hard: "Очень сложно"
-  };
+  LockpickingMinigame.difficultySettings = difficultySettings;
+  LockpickingMinigame.difficultyWearSpeed = difficultyWearSpeed;
 
-  // Пути к звукам-плейсхолдерам. Просто положите свои mp3 в modules/skyrim-lockpicking/sounds/
+  // Пути к звукам-плейсхолдерам. Просто положите свои mp3 в modules/lockpicking-minigame/sounds/
   // с этими именами - код ничего больше менять не потребует.
   const SOUND_PATHS = {
     scratch: `modules/${MODULE_ID}/sounds/scratch.mp3`,
     brk: `modules/${MODULE_ID}/sounds/break.mp3`,
-    success: `modules/${MODULE_ID}/sounds/success.mp3`
+    success: `modules/${MODULE_ID}/sounds/success.mp3`,
+    probe: `modules/${MODULE_ID}/sounds/probe.mp3`, // движение отмычки туда-сюда без поворота замка
+    turn: `modules/${MODULE_ID}/sounds/turn.mp3`    // поворот замка, пока отмычка держит правильное положение
   };
+
+  // Пути к текстурам-плейсхолдерам. Замените файлы в modules/lockpicking-minigame/textures/
+  // на свою графику - код ничего менять не потребует, если сохранить имена файлов.
+  const TEXTURE_PATHS = {
+    background: `modules/${MODULE_ID}/textures/background.png`, // статичный фон, не вращается
+    lock: `modules/${MODULE_ID}/textures/lock.png`,               // сам замок - ЭТА текстура проворачивается
+    pick: `modules/${MODULE_ID}/textures/pick.png`                // отмычка - точка поворота у левого края спрайта
+  };
+
+  /**
+   * Снятие флага "locked" с цели. Игрок обычно НЕ владеет актором
+   * сундука/двери (особенно если это ActorDelta от unlinked-токена), поэтому
+   * прямой setFlag() у него падает с ошибкой прав. Если апдейтить самому
+   * можно (ГМ или Owner) - делаем это напрямую; иначе просим сделать это
+   * любой активный ГМ-клиент через socket.
+   */
+  const SOCKET_CHANNEL = `module.${MODULE_ID}`;
+  const SOCKET_RESPONSE_CHANNEL = `module.${MODULE_ID}.response`;
+
+  LockpickingMinigame.requestUnlock = (target) => {
+    if (!target) return Promise.resolve(false);
+    if (game.user.isGM || target.isOwner) {
+      return target.setFlag(MODULE_ID, "locked", false).then(() => true).catch((err) => {
+        console.warn(`${MODULE_ID} | прямое снятие locked не удалось`, err);
+        return false;
+      });
+    }
+    return new Promise((resolve) => {
+      const requestId = foundry.utils.randomID();
+      let settled = false;
+      const onResponse = (payload) => {
+        if (payload?.requestId !== requestId) return;
+        settled = true;
+        game.socket.off(SOCKET_RESPONSE_CHANNEL, onResponse);
+        resolve(payload.ok === true);
+      };
+      game.socket.on(SOCKET_RESPONSE_CHANNEL, onResponse);
+      setTimeout(() => {
+        if (settled) return;
+        game.socket.off(SOCKET_RESPONSE_CHANNEL, onResponse);
+        resolve(false);
+      }, 4000);
+      game.socket.emit(SOCKET_CHANNEL, { action: "unlock", uuid: target.uuid, requester: game.user.id, requestId });
+    });
+  };
+
+  Hooks.once("ready", () => {
+    game.socket.on(SOCKET_CHANNEL, async (payload) => {
+      if (!game.user.isGM) return;
+      if (payload?.action !== "unlock") return;
+      let ok = false;
+      try {
+        const doc = await fromUuid(payload.uuid);
+        if (doc) {
+          await doc.setFlag(MODULE_ID, "locked", false);
+          ok = true;
+        }
+        console.debug(`${MODULE_ID} | socket: снял locked по запросу игрока`, payload.uuid, "ok:", ok);
+      } catch (err) {
+        console.warn(`${MODULE_ID} | socket unlock failed`, err);
+      }
+      game.socket.emit(SOCKET_RESPONSE_CHANNEL, { requestId: payload.requestId, ok });
+    });
+  });
 
   class LockpickApp extends Application {
     /**
@@ -51,7 +110,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
 
       // Бонус от навыка "Ловкость рук" подконтрольного персонажа.
       // Если у актора нет такого навыка (например, у ГМ без персонажа) - 0 (дефолт).
-      const skillInfo = SkyrimLockpicking.computeSkillBonus(this.actingActor);
+      const skillInfo = LockpickingMinigame.computeSkillBonus(this.actingActor);
       this.skillMod = skillInfo.mod;
       this.skillBonus = skillInfo.bonus;
       this.baseZoneWidth = difficultySettings[this.difficulty];
@@ -81,29 +140,101 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
 
       // Звуки (плейсхолдеры под mp3, см. SOUND_PATHS выше)
       this._scratchPlaying = false;
+      this._turnPlaying = false;
+      this._lastProbeSoundTime = 0;
       this.sounds = {
         scratch: new Audio(SOUND_PATHS.scratch),
         brk: new Audio(SOUND_PATHS.brk),
-        success: new Audio(SOUND_PATHS.success)
+        success: new Audio(SOUND_PATHS.success),
+        probe: new Audio(SOUND_PATHS.probe),
+        turn: new Audio(SOUND_PATHS.turn)
       };
       this.sounds.scratch.loop = true;
       this.sounds.scratch.volume = 0.5;
       this.sounds.brk.volume = 0.7;
       this.sounds.success.volume = 0.7;
+      this.sounds.probe.volume = 0.3;
+      this.sounds.turn.loop = true;
+      this.sounds.turn.volume = 0.4;
+
+      // Спрайты - фон статичен, замок вращается вместе с currentLockAngle,
+      // отмычка вращается вместе с currentPickAngle (см. _loadImages()).
+      this.images = { background: null, lock: null, pick: null };
+      this._imagesReady = false;
 
       this._rafId = null;
       this._bound = {};
     }
 
+    _loadImages() {
+      const load = (src) => new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => { console.warn(`${MODULE_ID} | не удалось загрузить текстуру`, src); resolve(null); };
+        img.src = src;
+      });
+
+      // Многие текстуры (особенно экспортированные из 3D-рендера) содержат
+      // огромные прозрачные поля вокруг самого объекта - если использовать
+      // весь холст файла как есть, реальный рисунок оказывается крошечным
+      // после масштабирования. Поэтому вычисляем bounding box непрозрачных
+      // пикселей и дальше везде используем именно его как "содержимое".
+      const trim = (img) => {
+        if (!img) return null;
+        try {
+          const off = document.createElement("canvas");
+          off.width = img.naturalWidth;
+          off.height = img.naturalHeight;
+          const octx = off.getContext("2d", { willReadFrequently: true });
+          octx.drawImage(img, 0, 0);
+
+          const w = off.width, h = off.height;
+          const step = Math.max(1, Math.floor(Math.max(w, h) / 512)); // выборка для скорости на больших текстурах
+          const data = octx.getImageData(0, 0, w, h).data;
+
+          let minX = w, minY = h, maxX = -1, maxY = -1;
+          for (let y = 0; y < h; y += step) {
+            for (let x = 0; x < w; x += step) {
+              if (data[(y * w + x) * 4 + 3] > 8) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+            }
+          }
+
+          const box = (maxX < minX || maxY < minY)
+            ? { x: 0, y: 0, w, h }
+            : { x: Math.max(0, minX - step), y: Math.max(0, minY - step),
+                w: Math.min(w, maxX - minX + 1 + step * 2), h: Math.min(h, maxY - minY + 1 + step * 2) };
+
+          return { img, box };
+        } catch (err) {
+          console.warn(`${MODULE_ID} | не удалось определить границы содержимого текстуры`, err);
+          return { img, box: { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight } };
+        }
+      };
+
+      return Promise.all([
+        load(TEXTURE_PATHS.background),
+        load(TEXTURE_PATHS.lock),
+        load(TEXTURE_PATHS.pick)
+      ]).then(([background, lock, pick]) => {
+        this.images = { background: trim(background), lock: trim(lock), pick: trim(pick) };
+        this._imagesReady = true;
+      });
+    }
+
     static get defaultOptions() {
       return foundry.utils.mergeObject(super.defaultOptions, {
-        id: "skyrim-lockpicking-app",
-        title: "Взлом замка",
+        id: "lockpicking-minigame-app",
+        title: LockpickingMinigame.t("windowTitle"),
         template: `modules/${MODULE_ID}/templates/lockpick-app.hbs`,
-        width: 440,
+        width: 460,
         height: "auto",
         resizable: false,
-        classes: ["skyrim-lockpicking-window"]
+        classes: ["lockpicking-minigame-window"]
       });
     }
 
@@ -116,9 +247,14 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       const fmt = (n) => (n >= 0 ? "+" : "") + n.toFixed(1).replace(".", ",");
       return {
         picksCount: this.lockpickCount,
-        skillModDisplay: (this.skillMod >= 0 ? "+" : "") + this.skillMod,
-        durabilityBonusDisplay: fmt(this.skillBonus),
-        zoneBonusDisplay: fmt(this.skillBonus)
+        picksLabel: LockpickingMinigame.t("picksLabel"),
+        controlsHint: LockpickingMinigame.t("controlsHint"),
+        skillLine: LockpickingMinigame.t(
+          "skillLine",
+          (this.skillMod >= 0 ? "+" : "") + this.skillMod,
+          fmt(this.skillBonus),
+          fmt(this.skillBonus)
+        )
       };
     }
 
@@ -133,7 +269,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
         if (qty <= 0) {
           await this.lockpickItem.delete();
           // Возможно, у актора есть ещё одна отмычка отдельным стеком/предметом
-          this.lockpickItem = SkyrimLockpicking.findLockpickItem(this.actingActor);
+          this.lockpickItem = LockpickingMinigame.findLockpickItem(this.actingActor);
           if (this.lockpickItem) this.lockpickCount = this.lockpickItem.system?.quantity ?? 1;
         } else {
           await this.lockpickItem.update({ "system.quantity": qty });
@@ -176,6 +312,29 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       this.sounds.success.play().catch(() => {});
     }
 
+    _startTurnSound() {
+      if (this._turnPlaying) return;
+      this._turnPlaying = true;
+      this.sounds.turn.currentTime = 0;
+      this.sounds.turn.play().catch(() => {});
+    }
+
+    _stopTurnSound() {
+      if (!this._turnPlaying) return;
+      this._turnPlaying = false;
+      this.sounds.turn.pause();
+      this.sounds.turn.currentTime = 0;
+    }
+
+    /** Короткий звук "нащупывания" при движении мыши без поворота замка - throttled */
+    _playProbeSound() {
+      const now = Date.now();
+      if (now - this._lastProbeSoundTime < 150) return;
+      this._lastProbeSoundTime = now;
+      this.sounds.probe.currentTime = 0;
+      this.sounds.probe.play().catch(() => {});
+    }
+
     /* -------------------------- ЛИСТЕНЕРЫ --------------------------- */
 
     activateListeners(html) {
@@ -194,12 +353,17 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       window.addEventListener("keyup", this._bound.onKeyUp);
       window.addEventListener("blur", this._bound.onBlur);
 
+      // Загружаем текстуры асинхронно, но не блокируем открытие окна ими -
+      // цикл отрисовки сам подождёт готовности (см. _drawCanvas).
+      this._loadImages();
+
       this._loop();
     }
 
     async close(options) {
       if (this._rafId) cancelAnimationFrame(this._rafId);
       this._stopScratchSound();
+      this._stopTurnSound();
       window.removeEventListener("keydown", this._bound.onKeyDown);
       window.removeEventListener("keyup", this._bound.onKeyUp);
       window.removeEventListener("blur", this._bound.onBlur);
@@ -213,6 +377,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       const y = e.clientY - rect.top - rect.height / 2;
       let angle = Math.atan2(-y, x) * (180 / Math.PI);
       if (angle < 0) angle = x >= 0 ? 0 : 180;
+      if (Math.abs(angle - this.currentPickAngle) > 0.5) this._playProbeSound();
       this.currentPickAngle = angle;
     }
 
@@ -229,6 +394,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
     _clearKeys() {
       for (const key in this.keysPressed) this.keysPressed[key] = false;
       this._stopScratchSound();
+      this._stopTurnSound();
     }
 
     /* --------------------------- ИГРОВОЙ ЦИКЛ --------------------------- */
@@ -280,20 +446,24 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
 
         if (this.currentPickAngle >= minSafe && this.currentPickAngle <= maxSafe) {
           this._stopScratchSound();
+          this._startTurnSound();
           if (this.currentLockAngle < 90) {
             this.currentLockAngle += 1.5;
           } else {
             this.currentLockAngle = 90;
             this.pickState = "success"; // немедленно блокируем повторный вход
+            this._stopTurnSound();
             this._onSuccess();
           }
         } else {
           const maxAllowedTurn = Math.max(0, 90 - Math.abs(this.currentPickAngle - this.mockLockData.targetAngle) * 3);
           if (this.currentLockAngle < maxAllowedTurn) {
             this._stopScratchSound();
+            this._stopTurnSound();
             this.currentLockAngle += 1.5;
           } else {
             this.currentLockAngle = maxAllowedTurn;
+            this._stopTurnSound();
             this._startScratchSound();
             const distanceToZone = Math.abs(this.currentPickAngle - this.mockLockData.targetAngle);
             this._updateScratchPitch(distanceToZone);
@@ -304,6 +474,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
         }
       } else {
         this._stopScratchSound();
+        this._stopTurnSound();
         if (this.currentLockAngle > 0) {
           this.currentLockAngle -= 4;
           if (this.currentLockAngle < 0) this.currentLockAngle = 0;
@@ -340,11 +511,22 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       this._finished = true;
       if (this._rafId) cancelAnimationFrame(this._rafId);
       this._stopScratchSound();
+      this._stopTurnSound();
       this._playSuccessSound();
+
+      const who = this.actingActor?.name ?? game.user.name;
+      const what = this.target?.name ?? LockpickingMinigame.t("windowTitle");
+      ChatMessage.create({
+        content: LockpickingMinigame.t("successChat", who, what),
+        speaker: ChatMessage.getSpeaker({ actor: this.actingActor })
+      });
 
       if (this.target) {
         try {
-          await this.target.setFlag(MODULE_ID, "locked", false);
+          const ok = await LockpickingMinigame.requestUnlock(this.target);
+          if (ok === false) {
+            console.warn(`${MODULE_ID} | не удалось снять флаг locked - похоже, ни один ГМ-клиент не в сети`);
+          }
         } catch (err) {
           console.warn(`${MODULE_ID} | не удалось снять флаг locked`, err);
         }
@@ -357,6 +539,7 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       this._finished = true;
       if (this._rafId) cancelAnimationFrame(this._rafId);
       this._stopScratchSound();
+      this._stopTurnSound();
       this.close();
     }
 
@@ -369,52 +552,114 @@ window.SkyrimLockpicking = window.SkyrimLockpicking || {};
       const cy = canvas.height / 2;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      let strokeColor = "#555";
-      let shadowColor = "transparent";
-      let shadowBlur = 0;
+      if (!this._imagesReady) return; // подождём один-два кадра, пока грузятся текстуры
 
-      if (this.pickState === "normal" && this.pickDurability < 100) {
-        const stressFactor = (100 - this.pickDurability) / 100;
-        const r = Math.floor(85 + 170 * stressFactor);
-        const g = Math.floor(85 - 85 * stressFactor);
-        const b = Math.floor(85 - 85 * stressFactor);
-        strokeColor = `rgb(${r}, ${g}, ${b})`;
-        shadowColor = `rgba(255, 0, 0, ${stressFactor * 0.6})`;
-        shadowBlur = stressFactor * 15;
+      const { background, lock, pick } = this.images;
+
+      // Единый масштаб, посчитанный от фона: фон и замок родом из одной
+      // сцены/рендера в одинаковом холсте (4096x4096), поэтому если
+      // применить К ОБОИМ ОДИН И ТОТ ЖЕ коэффициент масштабирования (а не
+      // считать для замка отдельный "contain" в свой личный target), их
+      // изначальные пропорции друг к другу сохранятся без зазора - именно
+      // так, как они и задуманы художником.
+      let bgScale = 400 / 400;
+      if (background) {
+        const { box } = background;
+        bgScale = 400 / Math.max(box.w, box.h);
       }
 
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(this.currentLockAngle * Math.PI / 180);
-      ctx.beginPath(); ctx.arc(0, 0, 90, 0, 2 * Math.PI);
-      ctx.fillStyle = "#333"; ctx.fill();
-      ctx.lineWidth = 6; ctx.strokeStyle = strokeColor; ctx.shadowBlur = shadowBlur; ctx.shadowColor = shadowColor; ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.beginPath(); ctx.arc(0, 0, 60, 0, 2 * Math.PI);
-      ctx.fillStyle = "#222"; ctx.fill();
-      ctx.lineWidth = 3; ctx.strokeStyle = "#111"; ctx.stroke();
-      ctx.fillStyle = "#050505"; ctx.fillRect(-5, -25, 10, 50);
-      ctx.restore();
+      if (background) {
+        const { img, box } = background;
+        const dw = box.w * bgScale, dh = box.h * bgScale;
+        ctx.drawImage(img, box.x, box.y, box.w, box.h, cx - dw / 2, cy - dh / 2, dw, dh);
+      }
 
-      if (this.pickState === "breaking") {
-        ctx.save(); ctx.translate(cx, cy); ctx.rotate(-this.currentPickAngle * Math.PI / 180);
-        ctx.translate(this.debris.part1.x, this.debris.part1.y); ctx.rotate(this.debris.part1.rot);
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(50, 0);
-        ctx.lineWidth = 4; ctx.strokeStyle = "#d1d1d1"; ctx.stroke(); ctx.restore();
+      // Замок - ЭТА текстура вращается вместе с currentLockAngle.
+      // Масштабируется ТЕМ ЖЕ коэффициентом, что и фон (см. выше) - никакого
+      // отдельного "подгона под 200px", поэтому зазора с фоном не будет.
+      let lockDw = 0, lockDh = 0;
+      if (lock) {
+        const { img, box } = lock;
+        lockDw = box.w * bgScale;
+        lockDh = box.h * bgScale;
 
-        ctx.save(); ctx.translate(cx, cy); ctx.rotate(-this.currentPickAngle * Math.PI / 180);
-        ctx.translate(this.debris.part2.x, this.debris.part2.y); ctx.rotate(this.debris.part2.rot);
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(70, 0); ctx.lineTo(75, -8);
-        ctx.lineWidth = 4; ctx.strokeStyle = "#d1d1d1"; ctx.stroke(); ctx.restore();
-      } else {
-        ctx.save(); ctx.translate(cx, cy); ctx.rotate(-this.currentPickAngle * Math.PI / 180);
-        ctx.translate(this.appearOffset, 0);
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(140, 0);
-        ctx.lineWidth = 4; ctx.strokeStyle = "#d1d1d1"; ctx.lineCap = "round";
-        ctx.lineTo(145, -8); ctx.stroke(); ctx.restore();
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(this.currentLockAngle * Math.PI / 180);
+        ctx.drawImage(img, box.x, box.y, box.w, box.h, -lockDw / 2, -lockDh / 2, lockDw, lockDh);
+        ctx.restore();
+      }
+
+      // Индикатор напряжения - просто полупрозрачный красный круг ПОВЕРХ
+      // замка (не тень под спрайтом, как раньше), не вращается вместе с
+      // замком - это просто накладной индикатор состояния.
+      if (this.pickState === "normal" && this.pickDurability < 100) {
+        const stressFactor = (100 - this.pickDurability) / 100;
+        const radius = (lockDw ? Math.max(lockDw, lockDh) : 200) / 2;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = `rgba(255, 0, 0, ${stressFactor * 0.35})`;
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Отмычка / обломки отмычки.
+      // Ширина (видимая "длина/охват" отмычки) фиксирована - это влияет на
+      // игровую механику вращения, поэтому держим её постоянной. Высота же
+      // считается от реальных пропорций СОДЕРЖИМОГО файла (box), а не всего
+      // холста. Обрезка на обломки - в долях от box.w/h, так что любые поля
+      // вокруг рисунка в исходнике больше не проблема.
+      //
+      // Точка поворота отмычки сдвинута немного ВВЕРХ (pivotYOffset), чтобы
+      // она визуально попадала в круглую/центральную часть замка, а не в
+      // геометрический центр текстуры. И, что важно, вся эта точка поворота
+      // вложена ВНУТРЬ поворота замка (ctx.rotate(currentLockAngle) идёт
+      // первым) - поэтому отмычка физически "едет" вместе с замком при его
+      // вращении, а не остаётся неподвижной относительно экрана.
+      if (pick) {
+        const { img, box } = pick;
+        const displayW = 180;
+        const splitFrac = 1 / 3; // доля по ширине, где отмычка "переламывается" на 2 обломка
+        const scale = displayW / box.w;
+        const displayH = box.h * scale;
+        const pivotYOffset = -(lockDh ? lockDh * 0.18 : 15); // сдвиг вверх, в круглую часть замка
+
+        if (this.pickState === "breaking") {
+          const sw1 = box.w * splitFrac, dw1 = displayW * splitFrac;
+          const sw2 = box.w - sw1, dw2 = displayW - dw1;
+
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(this.currentLockAngle * Math.PI / 180);
+          ctx.translate(0, pivotYOffset);
+          ctx.rotate(-this.currentPickAngle * Math.PI / 180);
+          ctx.translate(this.debris.part1.x, this.debris.part1.y); ctx.rotate(this.debris.part1.rot);
+          ctx.drawImage(img, box.x, box.y, sw1, box.h, 0, -displayH / 2, dw1, displayH);
+          ctx.restore();
+
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(this.currentLockAngle * Math.PI / 180);
+          ctx.translate(0, pivotYOffset);
+          ctx.rotate(-this.currentPickAngle * Math.PI / 180);
+          ctx.translate(this.debris.part2.x, this.debris.part2.y); ctx.rotate(this.debris.part2.rot);
+          ctx.drawImage(img, box.x + sw1, box.y, sw2, box.h, 0, -displayH / 2, dw2, displayH);
+          ctx.restore();
+        } else {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(this.currentLockAngle * Math.PI / 180);
+          ctx.translate(0, pivotYOffset);
+          ctx.rotate(-this.currentPickAngle * Math.PI / 180);
+          ctx.translate(this.appearOffset, 0);
+          ctx.drawImage(img, box.x, box.y, box.w, box.h, 0, -displayH / 2, displayW, displayH);
+          ctx.restore();
+        }
       }
     }
   }
 
-  SkyrimLockpicking.LockpickApp = LockpickApp;
+  LockpickingMinigame.LockpickApp = LockpickApp;
 })();
